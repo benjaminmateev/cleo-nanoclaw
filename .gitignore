@@ -46,3 +46,9 @@ AGENTS.md
 docs/maintainer-guide.md
 docs/drafts/
 forks.md
+.cleo-litellm.env
+.cleo-litellm-noauth.config.yaml
+OPENCODE-INSTALL-REPORT.md
+
+# oh-my-claudecode tool workdir
+.omc/

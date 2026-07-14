@@ -23,6 +23,13 @@ ARG INSTALL_CJK_FONTS=false
 # runtime) is pinned here because it installs from a different source.
 ARG BUN_VERSION=1.3.12
 
+# OpenCode CLI — pinned to match @opencode-ai/sdk in agent-runner/package.json.
+# Do NOT use `latest`: the CLI and SDK must be the same version (1.14.x has a
+# breaking session API change incompatible with SDK 1.4.x). Installed via its
+# own RUN block below rather than cli-tools.json so the add-opencode Dockerfile
+# guard (src/opencode-dockerfile.test.ts) can assert the pinned install.
+ARG OPENCODE_VERSION=1.4.17
+
 # ---- System dependencies -----------------------------------------------------
 # tini: correct PID 1 / signal forwarding so outbound.db writes finalize on
 # SIGTERM instead of being orphaned by the shell entrypoint.
@@ -105,6 +112,10 @@ RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 COPY cli-tools.json install-cli-tools.sh /tmp/
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     sh /tmp/install-cli-tools.sh /tmp/cli-tools.json
+
+# OpenCode CLI — its own layer for cache granularity, pinned to OPENCODE_VERSION.
+RUN --mount=type=cache,target=/root/.cache/pnpm \
+    pnpm install -g "opencode-ai@${OPENCODE_VERSION}"
 
 # ---- ncl CLI wrapper ----------------------------------------------------------
 # Actual script lives in the mounted source at /app/src/cli/ncl.ts.
