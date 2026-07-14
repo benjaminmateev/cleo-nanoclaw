@@ -3,8 +3,24 @@ import { spawn, type ChildProcess } from 'child_process';
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk';
 
 import { registerProvider } from './provider-registry.js';
-import type { AgentProvider, AgentQuery, ProviderEvent, ProviderOptions, QueryInput } from './types.js';
+import type {
+  AgentProvider,
+  AgentQuery,
+  ProviderEvent,
+  ProviderExchange,
+  ProviderOptions,
+  QueryInput,
+} from './types.js';
 import { mcpServersToOpenCodeConfig } from './mcp-to-opencode.js';
+import { createCleoMemory, type CleoMemory } from '../memory-cleo/index.js';
+
+// Cleo's self-learning memory, lazily created once per process. Null if the
+// LiteLLM endpoint/key aren't configured (memory degrades off, agent runs on).
+let cleoMemory: CleoMemory | null | undefined;
+function getMemory(): CleoMemory | null {
+  if (cleoMemory === undefined) cleoMemory = createCleoMemory();
+  return cleoMemory;
+}
 
 function log(msg: string): void {
   console.error(`[opencode-provider] ${msg}`);
@@ -247,11 +263,30 @@ function sessionErrorMessage(props: { error?: unknown }): string {
 export class OpenCodeProvider implements AgentProvider {
   readonly supportsNativeSlashCommands = false;
 
+  // Opt into the runner's memory/ scaffold and drive Cleo's self-learning
+  // extraction from each completed exchange (OpenCode keeps no on-disk
+  // transcript we can mine, so we do it here).
+  readonly usesMemoryScaffold = true;
+
   private readonly options: ProviderOptions;
   private activeSessionId: string | undefined;
 
   constructor(options: ProviderOptions = {}) {
     this.options = options;
+  }
+
+  onExchangeComplete(exchange: ProviderExchange): void {
+    if (exchange.status !== 'completed' || !exchange.result) return;
+    const memory = getMemory();
+    if (!memory) return;
+    // Fire-and-forget: never block or fail the turn on memory. The poll-loop
+    // also catches throws, but we swallow here so a rejected promise from the
+    // async extractor can't surface as an unhandled rejection.
+    void memory
+      .onExchange({ prompt: exchange.prompt, result: exchange.result })
+      .catch((err: unknown) =>
+        log(`memory extraction failed: ${err instanceof Error ? err.message : String(err)}`),
+      );
   }
 
   isSessionInvalid(err: unknown): boolean {
@@ -272,7 +307,7 @@ export class OpenCodeProvider implements AgentProvider {
     let aborted = false;
 
     const systemInstructions = input.systemContext?.instructions;
-    pending.push(wrapPromptWithContext(input.prompt, systemInstructions));
+    const firstPrompt = input.prompt;
 
     const kick = (): void => {
       waiting?.();
@@ -283,6 +318,24 @@ export class OpenCodeProvider implements AgentProvider {
 
     async function* gen(): AsyncGenerator<ProviderEvent> {
       let initYielded = false;
+
+      // Recall-before-turn: fetch memory relevant to the user's message and
+      // fold it into the system context so the agent answers from what Cleo has
+      // learned. Best-effort — a recall failure must not block the turn.
+      let recalled = '';
+      const memory = getMemory();
+      if (memory) {
+        try {
+          recalled = await memory.recallFor(firstPrompt);
+        } catch (err) {
+          log(`recall failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      const contextForTurn = recalled
+        ? `${systemInstructions ? `${systemInstructions}\n\n` : ''}${recalled}`
+        : systemInstructions;
+      pending.push(wrapPromptWithContext(firstPrompt, contextForTurn));
+
       const rt = await ensureSharedRuntime(self.options);
       const { client, stream } = rt;
 
