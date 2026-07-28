@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "gmail": {
+      "command": "gmail-mcp",
+      "args": [],
+      "env": {
+        "GMAIL_OAUTH_PATH": "/workspace/extra/.gmail-mcp/gcp-oauth.keys.json",
+        "GMAIL_CREDENTIALS_PATH": "/workspace/extra/.gmail-mcp/credentials.json"
+      }
+    },
+    "calendar": {
+      "command": "google-calendar-mcp",
+      "args": [],
+      "env": {
+        "GOOGLE_OAUTH_CREDENTIALS": "/workspace/extra/.calendar-mcp/gcp-oauth.keys.json",
+        "GOOGLE_CALENDAR_MCP_TOKEN_PATH": "/workspace/extra/.calendar-mcp/credentials.json"
+      }
+    },
+    "todoist": {
+      "command": "npx",
+      "args": ["-y", "@doist/todoist-mcp"],
+      "env": {
+        "TODOIST_API_KEY": "SET_PER_CUSTOMER"
+      }
+    }
+  }
+}
