@@ -30,6 +30,12 @@ ARG BUN_VERSION=1.3.12
 # guard (src/opencode-dockerfile.test.ts) can assert the pinned install.
 ARG OPENCODE_VERSION=1.4.17
 
+# Gmail MCP server (add-gmail-tool skill) — pinned; see skill for zod pin rationale.
+ARG GMAIL_MCP_VERSION=1.1.11
+
+# Google Calendar MCP server (add-gcal-tool skill) — multi-calendar cocal package.
+ARG CALENDAR_MCP_VERSION=2.6.1
+
 # ---- System dependencies -----------------------------------------------------
 # tini: correct PID 1 / signal forwarding so outbound.db writes finalize on
 # SIGTERM instead of being orphaned by the shell entrypoint.
@@ -116,6 +122,14 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 # OpenCode CLI — its own layer for cache granularity, pinned to OPENCODE_VERSION.
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     pnpm install -g "opencode-ai@${OPENCODE_VERSION}"
+
+# Gmail MCP server (add-gmail-tool skill). zod-to-json-schema pinned pre-v3-subpath
+# to avoid ERR_PACKAGE_PATH_NOT_EXPORTED with the zod version this package resolves.
+RUN --mount=type=cache,target=/root/.cache/pnpm \
+    pnpm install -g \
+        "@gongrzhe/server-gmail-autoauth-mcp@${GMAIL_MCP_VERSION}" \
+        "@cocal/google-calendar-mcp@${CALENDAR_MCP_VERSION}" \
+        "zod-to-json-schema@3.22.5"
 
 # ---- ncl CLI wrapper ----------------------------------------------------------
 # Actual script lives in the mounted source at /app/src/cli/ncl.ts.

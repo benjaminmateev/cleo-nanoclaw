@@ -47,6 +47,7 @@ docs/maintainer-guide.md
 docs/drafts/
 forks.md
 .cleo-litellm.env
+.cleo-todoist.env
 .cleo-litellm-noauth.config.yaml
 OPENCODE-INSTALL-REPORT.md
 
