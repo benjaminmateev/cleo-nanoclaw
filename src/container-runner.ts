@@ -461,7 +461,20 @@ async function buildContainerArgs(
   // User mapping
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
-  if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
+  // The root case is deliberate, not an oversight of the original condition:
+  // upstream skips --user for uid 0 on the assumption that the host is never
+  // root. Under a systemd *system* unit it is. The container then runs as its
+  // baked-in uid 1000 while every host-created file (session databases, group
+  // workspace) is root-owned mode 644, and the agent dies on its first write
+  // with the opaque "attempt to write a readonly database".
+  //
+  // Passing --user 0:0 puts container and host on the same uid. Root ignores
+  // permission bits, so this needs no chown sweep and no new host user, and it
+  // grants nothing extra — the container is already spawned by a root daemon.
+  if (hostUid === 0) {
+    args.push('--user', '0:0');
+    args.push('-e', 'HOME=/root');
+  } else if (hostUid != null && hostUid !== 1000) {
     args.push('--user', `${hostUid}:${hostGid}`);
     args.push('-e', 'HOME=/home/node');
   }

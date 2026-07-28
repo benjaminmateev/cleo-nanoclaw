@@ -26,6 +26,16 @@ const OPENCODE_ENV_KEYS = [
   'LITELLM_MASTER_KEY',
 ] as const;
 
+/** Hostname/IP out of a URL, or undefined if it is absent or unparseable. */
+function hostOf(url: string | undefined): string | undefined {
+  if (!url?.trim()) return undefined;
+  try {
+    return new URL(url).hostname || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function mergeNoProxy(current: string | undefined, additions: string): string {
   if (!current?.trim()) return additions;
   const parts = new Set(
@@ -45,10 +55,23 @@ registerProviderContainerConfig('opencode', (ctx) => {
   const opencodeDir = path.join(ctx.sessionDir, 'opencode-xdg');
   fs.mkdirSync(opencodeDir, { recursive: true });
 
+  // The proxy bypass list must cover however the container reaches the LiteLLM
+  // proxy on the host. On macOS that is host.docker.internal; on Linux the
+  // upstream URL is the docker bridge gateway (e.g. 10.0.0.1), which the
+  // original 127.0.0.1/localhost pair does NOT cover — OneCLI's HTTPS_PROXY
+  // then swallows the request and OpenCode reports the misleading "Cannot
+  // connect to API: Unable to connect".
+  //
+  // Deriving the host from ANTHROPIC_BASE_URL keeps this correct wherever the
+  // proxy is pointed, instead of hardcoding a gateway address that differs per
+  // Docker install.
+  const upstreamHost = hostOf(ctx.hostEnv.ANTHROPIC_BASE_URL || readEnvFile(['ANTHROPIC_BASE_URL']).ANTHROPIC_BASE_URL);
+  const bypass = ['127.0.0.1', 'localhost', 'host.docker.internal', upstreamHost].filter(Boolean).join(',');
+
   const env: Record<string, string> = {
     XDG_DATA_HOME: '/opencode-xdg',
-    NO_PROXY: mergeNoProxy(ctx.hostEnv.NO_PROXY, '127.0.0.1,localhost'),
-    no_proxy: mergeNoProxy(ctx.hostEnv.no_proxy, '127.0.0.1,localhost'),
+    NO_PROXY: mergeNoProxy(ctx.hostEnv.NO_PROXY, bypass),
+    no_proxy: mergeNoProxy(ctx.hostEnv.no_proxy, bypass),
   };
   // Prefer process.env, but fall back to .env — under the launchd/systemd
   // service the process environment carries only PATH/HOME, so these values
