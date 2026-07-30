@@ -136,6 +136,15 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 RUN printf '#!/bin/sh\nexec bun /app/src/cli/ncl.ts "$@"\n' > /usr/local/bin/ncl && \
     chmod +x /usr/local/bin/ncl
 
+# ---- cleo-records CLI ---------------------------------------------------------
+# The agent's interface to its own structured memory (invoices, commitments,
+# vendor cadence). Separate from `ncl`: that one talks to the host over a socket
+# and its writes are approval-gated, which is right for changing infrastructure
+# and wrong for "note the invoice I just read". Like ncl, the script lives in the
+# bind-mounted source, so it updates without an image rebuild.
+RUN printf '#!/bin/sh\nexec bun /app/src/records/cli.ts "$@"\n' > /usr/local/bin/cleo-records && \
+    chmod +x /usr/local/bin/cleo-records
+
 # ---- Entrypoint --------------------------------------------------------------
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
