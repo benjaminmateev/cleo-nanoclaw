@@ -181,6 +181,66 @@ export function markNudged(db: Database, id: string) {
   db.query(`UPDATE commitments SET last_nudged_at = ?, updated_at = ? WHERE id = ?`).run(ts, ts, id);
 }
 
+// --- task-app projection ----------------------------------------------------
+
+/**
+ * Commitments that are open but not yet pushed to `target`. This is what makes
+ * the projection idempotent: a sweep pushes only what is missing, so re-running
+ * it does not fill the customer's task app with duplicates.
+ */
+export function commitmentsToProject(db: Database, target: string) {
+  return db
+    .query(
+      `SELECT c.* FROM commitments c
+        LEFT JOIN task_projections p
+          ON p.commitment_id = c.id AND p.target = ?
+        WHERE c.status = 'open' AND p.commitment_id IS NULL
+        ORDER BY COALESCE(c.due_on, c.promised_on) ASC`,
+    )
+    .all(target);
+}
+
+export function recordProjection(db: Database, commitmentId: string, target: string, externalId?: string | null) {
+  db.query(
+    `INSERT INTO task_projections (commitment_id, target, external_id, pushed_at)
+     VALUES (?,?,?,?)
+     ON CONFLICT(commitment_id, target) DO UPDATE SET external_id = excluded.external_id`,
+  ).run(commitmentId, target, externalId ?? null, now());
+}
+
+/**
+ * Close a commitment because it was completed in the task app.
+ *
+ * This is the ONLY direction completion flows (see tasklist.ts): the task app
+ * owns "done", SQLite owns everything else. Recording `completed_seen_at`
+ * separately from the commitment's own `closed_on` keeps the audit trail honest
+ * about *where* the completion came from.
+ */
+export function closeFromProjection(db: Database, target: string, externalId: string): { closed: boolean } {
+  const row = db
+    .query(`SELECT commitment_id FROM task_projections WHERE target = ? AND external_id = ?`)
+    .get(target, externalId) as { commitment_id: string } | null;
+  if (!row) return { closed: false };
+  const ts = now();
+  db.query(`UPDATE task_projections SET completed_seen_at = ? WHERE target = ? AND external_id = ?`)
+    .run(ts, target, externalId);
+  db.query(`UPDATE commitments SET status = 'done', closed_on = ?, updated_at = ? WHERE id = ? AND status = 'open'`)
+    .run(ts, ts, row.commitment_id);
+  return { closed: true };
+}
+
+/** External ids Cleo has pushed and not yet seen completed — the poll list. */
+export function pendingProjections(db: Database, target: string) {
+  return db
+    .query(
+      `SELECT p.external_id, p.commitment_id FROM task_projections p
+        JOIN commitments c ON c.id = p.commitment_id
+        WHERE p.target = ? AND p.completed_seen_at IS NULL
+          AND p.external_id IS NOT NULL AND c.status = 'open'`,
+    )
+    .all(target);
+}
+
 /**
  * Fold a newly seen invoice into the vendor's cadence profile.
  *

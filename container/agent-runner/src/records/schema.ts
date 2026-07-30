@@ -15,8 +15,15 @@ import { Database } from 'bun:sqlite';
 import path from 'node:path';
 import fs from 'node:fs';
 
-/** Schema version. Bump when adding a migration below. */
-export const SCHEMA_VERSION = 1;
+/**
+ * Schema version. Bump when adding a migration below.
+ * v2 (2026-07-30): task_projections, for the task-app projection.
+ *
+ * Note every table is CREATE TABLE IF NOT EXISTS, so adding a table is
+ * self-migrating on the next open. A version that CHANGES an existing table
+ * will need real migration steps here.
+ */
+export const SCHEMA_VERSION = 2;
 
 const DDL = `
 -- Invoices Cleo found, wherever it found them.
@@ -113,6 +120,22 @@ CREATE TABLE IF NOT EXISTS obligations (
 );
 CREATE INDEX IF NOT EXISTS idx_obligations_due ON obligations(status, due_on);
 
+-- Which commitments have been pushed to an external task app, and as what.
+-- Without this, every sweep re-creates the same task: SQLite ids are stable but
+-- the task app's are not derivable from them.
+--
+-- ON DELETE CASCADE because a projection row is meaningless without its
+-- commitment — this is why foreign_keys is switched on below.
+CREATE TABLE IF NOT EXISTS task_projections (
+  commitment_id  TEXT NOT NULL REFERENCES commitments(id) ON DELETE CASCADE,
+  target         TEXT NOT NULL,   -- 'todoist' | 'markdown'
+  external_id    TEXT,            -- the task id in the target system
+  pushed_at      TEXT NOT NULL,
+  completed_seen_at TEXT,         -- when we observed it completed THERE
+  PRIMARY KEY (commitment_id, target)
+);
+CREATE INDEX IF NOT EXISTS idx_projections_target ON task_projections(target, completed_seen_at);
+
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -136,10 +159,13 @@ export function openRecords(root: string): RecordsDb {
   db.run('PRAGMA journal_mode = WAL');
   db.run('PRAGMA foreign_keys = ON');
   db.run(DDL);
-  const row = db.query('SELECT value FROM meta WHERE key = ?').get('schema_version') as { value: string } | null;
-  if (!row) {
-    db.query('INSERT INTO meta (key, value) VALUES (?, ?)').run('schema_version', String(SCHEMA_VERSION));
-  }
+  // Upsert rather than insert-if-absent: an existing database that has just had
+  // a new table created by the DDL above is now at the current version, and
+  // leaving it recorded as the old one would make schemaVersion() lie.
+  db.query(
+    `INSERT INTO meta (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+  ).run('schema_version', String(SCHEMA_VERSION));
   return { db, close: () => db.close() };
 }
 
