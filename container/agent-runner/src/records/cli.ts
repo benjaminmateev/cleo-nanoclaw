@@ -19,6 +19,7 @@
  *   cleo-records close         --id <commitment-id> [--status done|dropped]
  *   cleo-records markdown      [--write]
  *   cleo-records overdue-vendors
+ *   cleo-records parse-invoice --file <path> [--source-ref <msg-id>]
  *
  * All output is JSON on stdout so the agent can read it without parsing prose.
  */
@@ -30,6 +31,7 @@ import {
   closeFromProjection, vendorsOverdue,
 } from './store.js';
 import { recordSweep, projectionPlan, confirmProjection, markdownProjection, sweepSummary } from './sweep.js';
+import { parseZugferd, extractXmlFromPdf, looksLikeInvoiceXml, toInvoiceInput } from './zugferd.js';
 
 const MEMORY_ROOT = process.env.CLEO_MEMORY_ROOT || '/workspace/agent/memory';
 const RECORDS_ROOT = path.join(MEMORY_ROOT, '.records');
@@ -141,10 +143,46 @@ try {
       out({ ok: true, vendors: vendorsOverdue(db) });
       break;
 
+    case 'parse-invoice': {
+      // The deterministic path: hand it a downloaded attachment and it either
+      // returns exact fields (no model, no cost) or reports that the file has
+      // no embedded XML, in which case the agent falls back to reading the PDF
+      // itself.
+      const file = flag('file');
+      if (!file) fail('parse-invoice needs --file');
+      if (!fs.existsSync(file)) fail(`no such file: ${file}`);
+
+      const bytes = new Uint8Array(fs.readFileSync(file));
+      const asText = Buffer.from(bytes).toString('utf8');
+      const xml = looksLikeInvoiceXml(asText) ? asText : extractXmlFromPdf(bytes);
+
+      if (!xml) {
+        out({
+          ok: true,
+          hasXml: false,
+          hint: 'No embedded invoice XML. Read the document yourself and record it with extraction: "llm" and a confidence score.',
+        });
+        break;
+      }
+      const parsed = parseZugferd(xml);
+      out({
+        ok: true,
+        hasXml: true,
+        parsed,
+        // Ready to hand straight to `record` — no reformatting by the model,
+        // which is the point of a deterministic path.
+        invoiceInput: toInvoiceInput(parsed, {
+          source: flag('source') ?? 'email-attachment',
+          sourceRef: flag('source-ref') ?? null,
+        }),
+      });
+      break;
+    }
+
     default:
       fail(
         `unknown command ${command ?? '(none)'} — expected one of: ` +
-          'record, due, open, review, plan, confirm, complete, close, markdown, overdue-vendors',
+          'record, due, open, review, plan, confirm, complete, close, markdown, overdue-vendors, parse-invoice',
       );
   }
 } finally {
